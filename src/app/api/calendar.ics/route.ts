@@ -55,11 +55,11 @@ export async function GET() {
   const databaseId = process.env.NOTION_DATABASE_ID;
 
   if (!token || !databaseId) {
-    return new NextResponse('Credenciais do Notion não configuradas no .env.local', { status: 500 });
+    return new NextResponse('Notion credentials not configured on Environment.', { status: 500 });
   }
 
   const calendar = ical({
-    name: 'Juventude EBC',
+    name: 'Youth EBC',
     timezone: 'Europe/Amsterdam',
     method: ICalCalendarMethod.PUBLISH,
   });
@@ -74,7 +74,7 @@ export async function GET() {
       const icon = page.icon?.type === 'emoji' ? `${page.icon.emoji} ` : '';
 
       // 2. Título
-      const rawTitle = props.Name?.title?.[0]?.plain_text || 'Sem título';
+      const rawTitle = props.Name?.title?.[0]?.plain_text || 'No title';
       const summary = `${icon}${rawTitle}`;
 
       // 3. Tratar Datas (Eventos normais usam 'Date', Aniversários usam 'Birthday')
@@ -116,9 +116,9 @@ export async function GET() {
 
       // 7. Descrição formatada
       const descriptionLines = [
-        tag ? `Categoria: ${tag}` : '',
-        pageContent ? `\n--- Detalhes ---\n${pageContent}` : '',
-        `\nVer no Notion: ${page.url}`,
+        tag ? `Category: ${tag}` : '',
+        pageContent ? `\n--- Details ---\n${pageContent}` : '',
+        `\nSee on Notion: ${page.url}`,
       ].filter(Boolean);
 
       const event = calendar.createEvent({
@@ -147,7 +147,7 @@ export async function GET() {
       },
     });
   } catch (error: any) {
-    console.error('Erro na API de Calendário:', error.message || error);
-    return new NextResponse(`Erro interno: ${error.message}`, { status: 500 });
+    console.error('Error on calendar API:', error.message || error);
+    return new NextResponse(`Internal error: ${error.message}`, { status: 500 });
   }
 }
