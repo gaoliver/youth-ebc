@@ -79,21 +79,36 @@ export async function GET() {
       const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
       const isBirthday = tag.toLowerCase() === 'birthday';
 
-      // 4. Date (Looks for "Event date" or "Date")
-      const dateProp = props['Event date']?.date || props.Date?.date;
+      // 4. Date (Strictly targeting "Event date")
+      const dateProp = props['Event date']?.date;
 
-      if (!dateProp) continue; 
+      if (!dateProp) continue;
 
-      const startDate = new Date(dateProp.start);
-      const isAllDay = !dateProp.start.includes('T');
+      const dateStartString = dateProp.start;
+      const isAllDay = !dateStartString.includes('T');
+      
+      let startDate: Date;
       let endDate: Date;
 
-      if (dateProp.end) {
-        endDate = new Date(dateProp.end);
+      // Safely parsing All-Day events to avoid Timezone bugs shifting the day
+      if (isAllDay) {
+        const [year, month, day] = dateStartString.split('-').map(Number);
+        startDate = new Date(year, month - 1, day);
+        
+        if (dateProp.end) {
+          const [endYear, endMonth, endDay] = dateProp.end.split('-').map(Number);
+          endDate = new Date(endYear, endMonth - 1, endDay);
+          endDate.setDate(endDate.getDate() + 1); // iCal requires end date to be exclusive for all-day
+        } else {
+          endDate = new Date(year, month - 1, day + 1);
+        }
       } else {
-        endDate = isAllDay
-          ? new Date(startDate.getTime() + 24 * 60 * 60 * 1000)
-          : new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
+        startDate = new Date(dateStartString);
+        if (dateProp.end) {
+          endDate = new Date(dateProp.end);
+        } else {
+          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // Default to 2 hours
+        }
       }
 
       // 5. Location
