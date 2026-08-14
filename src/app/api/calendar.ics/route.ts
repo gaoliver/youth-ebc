@@ -79,10 +79,16 @@ export async function GET() {
       const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
       const isBirthday = tag.toLowerCase() === 'birthday';
 
-      // 4. Date (Strictly targeting "Event date")
-      const dateProp = props['Event date']?.date;
+      // 4. Date (Robust extraction handling Notion Formula properties)
+      const dateProp = 
+        props['Event date']?.formula?.date || 
+        props['Event date']?.date || 
+        props['Date']?.date;
 
-      if (!dateProp) continue;
+      if (!dateProp) {
+        console.log(`[DEBUG] Skipped "${rawTitle}" because no date property was found.`);
+        continue;
+      }
 
       const dateStartString = dateProp.start;
       const isAllDay = !dateStartString.includes('T');
@@ -90,25 +96,25 @@ export async function GET() {
       let startDate: Date;
       let endDate: Date;
 
-      // Safely parsing All-Day events to avoid Timezone bugs shifting the day backwards
+      // Safely parsing All-Day events to avoid Timezone bugs
       if (isAllDay) {
-        // Force UTC midnight to bypass local machine timezones
-        startDate = new Date(`${dateStartString}T00:00:00Z`);
+        const [year, month, day] = dateStartString.split('-').map(Number);
+        startDate = new Date(year, month - 1, day);
         
         if (dateProp.end) {
-          endDate = new Date(`${dateProp.end}T00:00:00Z`);
-          // iCal standard: All-day event end dates must be exclusive (the day after)
-          endDate.setUTCDate(endDate.getUTCDate() + 1); 
+          const [endYear, endMonth, endDay] = dateProp.end.split('-').map(Number);
+          endDate = new Date(endYear, endMonth - 1, endDay);
+          endDate.setDate(endDate.getDate() + 1); 
         } else {
           endDate = new Date(startDate);
-          endDate.setUTCDate(endDate.getUTCDate() + 1);
+          endDate.setDate(endDate.getDate() + 1);
         }
       } else {
         startDate = new Date(dateStartString);
         if (dateProp.end) {
           endDate = new Date(dateProp.end);
         } else {
-          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // Default to 2 hours
+          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); 
         }
       }
 
