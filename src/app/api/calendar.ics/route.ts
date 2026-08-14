@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import ical, { ICalCalendarMethod, ICalEventRepeatingFreq } from 'ical-generator';
 
-export const revalidate = 600; // Atualiza a cada 10 minutos
+export const revalidate = 600; 
 
-// Função auxiliar para chamar a API do Notion via Fetch nativo
 async function queryNotionDatabase(databaseId: string, token: string) {
   const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
     method: 'POST',
@@ -16,13 +15,12 @@ async function queryNotionDatabase(databaseId: string, token: string) {
 
   if (!res.ok) {
     const errorBody = await res.text();
-    throw new Error(`Erro API Notion (${res.status}): ${errorBody}`);
+    throw new Error(`Notion API Error (${res.status}): ${errorBody}`);
   }
 
   return res.json();
 }
 
-// Função auxiliar para buscar o texto interno da página
 async function getPageBlocksText(pageId: string, token: string) {
   try {
     const res = await fetch(`https://api.notion.com/v1/blocks/${pageId}/children`, {
@@ -55,11 +53,11 @@ export async function GET() {
   const databaseId = process.env.NOTION_DATABASE_ID;
 
   if (!token || !databaseId) {
-    return new NextResponse('Notion credentials not configured on Environment.', { status: 500 });
+    return new NextResponse('Notion credentials not configured in .env.local', { status: 500 });
   }
 
   const calendar = ical({
-    name: 'Youth EBC',
+    name: 'EBC Youth',
     timezone: 'Europe/Amsterdam',
     method: ICalCalendarMethod.PUBLISH,
   });
@@ -70,55 +68,45 @@ export async function GET() {
     for (const page of data.results) {
       const props = page.properties;
 
-      // 1. Ícone / Emoji
+      // 1. Icon / Emoji
       const icon = page.icon?.type === 'emoji' ? `${page.icon.emoji} ` : '';
 
-      // 2. Título
-      const rawTitle = props.Name?.title?.[0]?.plain_text || 'No title';
+      // 2. Title
+      const rawTitle = props.Name?.title?.[0]?.plain_text || 'Untitled Event';
       const summary = `${icon}${rawTitle}`;
 
-      // 3. Tratar Datas (Eventos normais usam 'Date', Aniversários usam 'Birthday')
-      const dateProp = props.Date?.date;
-      const birthdayProp = props.Birthday?.date;
+      // 3. Category / Tag (To identify birthdays)
+      const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
+      const isBirthday = tag.toLowerCase() === 'birthday';
 
-      let startDate: Date | null = null;
-      let endDate: Date | null = null;
-      let isAllDay = false;
-      let isBirthday = false;
+      // 4. Date (Looks for "Event date" or "Date")
+      const dateProp = props['Event date']?.date || props.Date?.date;
 
-      if (dateProp) {
-        startDate = new Date(dateProp.start);
-        isAllDay = !dateProp.start.includes('T');
-        if (dateProp.end) {
-          endDate = new Date(dateProp.end);
-        } else {
-          endDate = isAllDay
-            ? new Date(startDate.getTime() + 24 * 60 * 60 * 1000)
-            : new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
-        }
-      } else if (birthdayProp) {
-        startDate = new Date(birthdayProp.start);
-        endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
-        isAllDay = true;
-        isBirthday = true;
+      if (!dateProp) continue; 
+
+      const startDate = new Date(dateProp.start);
+      const isAllDay = !dateProp.start.includes('T');
+      let endDate: Date;
+
+      if (dateProp.end) {
+        endDate = new Date(dateProp.end);
+      } else {
+        endDate = isAllDay
+          ? new Date(startDate.getTime() + 24 * 60 * 60 * 1000)
+          : new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
       }
 
-      if (!startDate || !endDate) continue;
-
-      // 4. Localização
+      // 5. Location
       const location = props.Location?.rich_text?.[0]?.plain_text || props.Location?.select?.name || '';
 
-      // 5. Categoria / Tag
-      const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
-
-      // 6. Texto interno do evento
+      // 6. Internal event text
       const pageContent = await getPageBlocksText(page.id, token);
 
-      // 7. Descrição formatada
+      // 7. Formatted description
       const descriptionLines = [
         tag ? `Category: ${tag}` : '',
         pageContent ? `\n--- Details ---\n${pageContent}` : '',
-        `\nSee on Notion: ${page.url}`,
+        `\nView on Notion: ${page.url}`,
       ].filter(Boolean);
 
       const event = calendar.createEvent({
@@ -147,7 +135,7 @@ export async function GET() {
       },
     });
   } catch (error: any) {
-    console.error('Error on calendar API:', error.message || error);
-    return new NextResponse(`Internal error: ${error.message}`, { status: 500 });
+    console.error('API Error:', error.message || error);
+    return new NextResponse(`Internal Error: ${error.message}`, { status: 500 });
   }
 }
