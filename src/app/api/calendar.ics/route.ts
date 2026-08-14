@@ -90,17 +90,18 @@ export async function GET() {
       let startDate: Date;
       let endDate: Date;
 
-      // Safely parsing All-Day events to avoid Timezone bugs shifting the day
+      // Safely parsing All-Day events to avoid Timezone bugs shifting the day backwards
       if (isAllDay) {
-        const [year, month, day] = dateStartString.split('-').map(Number);
-        startDate = new Date(year, month - 1, day);
+        // Force UTC midnight to bypass local machine timezones
+        startDate = new Date(`${dateStartString}T00:00:00Z`);
         
         if (dateProp.end) {
-          const [endYear, endMonth, endDay] = dateProp.end.split('-').map(Number);
-          endDate = new Date(endYear, endMonth - 1, endDay);
-          endDate.setDate(endDate.getDate() + 1); // iCal requires end date to be exclusive for all-day
+          endDate = new Date(`${dateProp.end}T00:00:00Z`);
+          // iCal standard: All-day event end dates must be exclusive (the day after)
+          endDate.setUTCDate(endDate.getUTCDate() + 1); 
         } else {
-          endDate = new Date(year, month - 1, day + 1);
+          endDate = new Date(startDate);
+          endDate.setUTCDate(endDate.getUTCDate() + 1);
         }
       } else {
         startDate = new Date(dateStartString);
