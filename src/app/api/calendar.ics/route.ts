@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import ical, { ICalCalendarMethod, ICalEventRepeatingFreq } from 'ical-generator';
 
-export const revalidate = 600; 
+// Desabilita o cache da rota para que as correções de horário reflitam imediatamente
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 async function queryNotionDatabase(databaseId: string, token: string) {
   const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
@@ -11,6 +13,7 @@ async function queryNotionDatabase(databaseId: string, token: string) {
       'Notion-Version': '2022-06-28',
       'Content-Type': 'application/json',
     },
+    cache: 'no-store',
   });
 
   if (!res.ok) {
@@ -29,6 +32,7 @@ async function getPageBlocksText(pageId: string, token: string) {
         'Authorization': `Bearer ${token}`,
         'Notion-Version': '2022-06-28',
       },
+      cache: 'no-store',
     });
 
     if (!res.ok) return '';
@@ -48,16 +52,6 @@ async function getPageBlocksText(pageId: string, token: string) {
   }
 }
 
-// Extrai os componentes literais de data e hora sem deixar o Node converter fuso
-function parseLocalDate(dateString: string): Date {
-  const clean = dateString.split('+')[0].replace('Z', '');
-  const [datePart, timePart = '00:00:00'] = clean.split('T');
-  const [year, month, day] = datePart.split('-').map(Number);
-  const [hours = 0, minutes = 0, seconds = 0] = timePart.split(':').map(Number);
-
-  return new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
-}
-
 export async function GET() {
   const token = process.env.NOTION_TOKEN;
   const databaseId = process.env.NOTION_DATABASE_ID;
@@ -69,6 +63,10 @@ export async function GET() {
   const calendar = ical({
     name: 'EBC Youth',
     timezone: 'Europe/Amsterdam',
+    x: [
+      { key: 'X-WR-TIMEZONE', value: 'Europe/Amsterdam' },
+      { key: 'X-WR-CALNAME', value: 'EBC Youth' },
+    ],
     method: ICalCalendarMethod.PUBLISH,
   });
 
@@ -106,6 +104,7 @@ export async function GET() {
       let endDate: Date;
 
       if (isAllDay) {
+        // Eventos de dia inteiro (ex: aniversários): YYYY-MM-DD
         const [year, month, day] = dateStartString.split('-').map(Number);
         startDate = new Date(Date.UTC(year, month - 1, day));
 
@@ -116,12 +115,15 @@ export async function GET() {
           endDate = new Date(Date.UTC(year, month - 1, day + 1));
         }
       } else {
-        startDate = parseLocalDate(dateStartString);
+        // Eventos com horário marcado:
+        // Como o Notion envia com offset (+02:00), o construtor nativo Date()
+        // calcula o timestamp UTC absoluto exato.
+        startDate = new Date(dateStartString);
 
         if (dateProp.end) {
-          endDate = parseLocalDate(dateProp.end);
+          endDate = new Date(dateProp.end);
         } else {
-          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h padrão
+          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h de duração padrão
         }
       }
 
@@ -139,12 +141,14 @@ export async function GET() {
       ].filter(Boolean);
 
       // 8. Event Creation
+      // NÃO passamos timezone individual no evento.
+      // O evento emite o padrão UTC (Z) absoluto e o X-WR-TIMEZONE do cabeçalho
+      // instrui o Apple Calendar / Google Calendar a renderizar em Europe/Amsterdam.
       calendar.createEvent({
         id: page.id,
         start: startDate,
         end: endDate,
         allDay: isAllDay,
-        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
         summary: summary,
         description: descriptionLines.join('\n'),
         location: location,
@@ -157,7 +161,7 @@ export async function GET() {
       headers: {
         'Content-Type': 'text/calendar; charset=utf-8',
         'Content-Disposition': 'inline; filename="calendar.ics"',
-        'Cache-Control': 'public, max-age=600, s-maxage=600, stale-while-revalidate=1200',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       },
     });
   } catch (error: any) {
