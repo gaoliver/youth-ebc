@@ -52,7 +52,7 @@ async function getPageBlocksText(pageId: string, token: string) {
   }
 }
 
-// ---------- Helper: escape iCal text ----------
+// ---------- Helper: escape iCal text strictly (RFC 5545) ----------
 function escapeICalText(text: string): string {
   return text
     .replace(/\\/g, '\\\\')
@@ -93,6 +93,20 @@ function formatDT(isoString: string, isAllDay: boolean): { line: string } {
   const second = get('second');
 
   return { line: `;TZID=Europe/Amsterdam:${year}${month}${day}T${hour}${minute}${second}` };
+}
+
+// ---------- Helper: extract text from any Notion property shape ----------
+function getPropText(prop: any): string {
+  if (!prop) return '';
+  if (prop.rich_text && prop.rich_text.length > 0) {
+    return prop.rich_text.map((t: any) => t.plain_text).join('');
+  }
+  if (prop.title && prop.title.length > 0) {
+    return prop.title.map((t: any) => t.plain_text).join('');
+  }
+  if (prop.select) return prop.select.name || '';
+  if (prop.url) return prop.url;
+  return '';
 }
 
 // ---------- GET handler ----------
@@ -139,7 +153,7 @@ export async function GET() {
     for (const page of data.results || []) {
       const props = page.properties;
 
-      // 1. Data
+      // 1. Data (Event date formula ou Date nativa)
       const dateProp =
         props?.['Event date']?.formula?.date ||
         props?.['Event date']?.date ||
@@ -156,27 +170,25 @@ export async function GET() {
       const rawTitle = props?.Name?.title?.[0]?.plain_text || 'Untitled';
       const title = `${icon}${rawTitle}`;
 
-      // 2. Categoria e Tags
+      // 2. Tags / Categorias
       const tagsArray = props?.Tags?.multi_select || [];
       const singleTag = props?.Tags?.select ? [props.Tags.select] : [];
       const allTags = [...tagsArray, ...singleTag];
       const tagLabel = allTags.map((t: any) => t.name).join(', ');
       const isBirthday = allTags.some((t: any) => t.name?.toLowerCase() === 'birthday');
 
-      // 3. Localização
-      const location = 
-        props?.Location?.rich_text?.[0]?.plain_text || 
-        props?.Location?.select?.name || 
-        '';
+      // 3. Localização (Busca por Location, Place, Local, Address)
+      const locationProp = props?.Location || props?.Place || props?.Local || props?.Address;
+      const location = getPropText(locationProp);
 
-      // 4. Descrição (Conteúdo interno da página)
+      // 4. Descrição do Evento (Conteúdo de dentro da página)
       const pageContent = await getPageBlocksText(page.id, token);
-      const descriptionLines = [
+      const descriptionParts = [
         tagLabel ? `Category: ${tagLabel}` : '',
         pageContent ? `\n--- Details ---\n${pageContent}` : '',
         page.url ? `\nView on Notion: ${page.url}` : '',
       ].filter(Boolean);
-      const fullDescription = descriptionLines.join('\n');
+      const fullDescription = descriptionParts.join('\n');
 
       lines.push('BEGIN:VEVENT');
       lines.push(`UID:${page.id}@ebc-youth`);
@@ -212,10 +224,12 @@ export async function GET() {
         }
       }
 
+      // Propriedade oficial de Localização
       if (location) {
         lines.push(`LOCATION:${escapeICalText(location)}`);
       }
 
+      // Propriedade oficial de Descrição / Notas
       if (fullDescription) {
         lines.push(`DESCRIPTION:${escapeICalText(fullDescription)}`);
       }
