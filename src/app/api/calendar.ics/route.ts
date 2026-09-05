@@ -62,13 +62,12 @@ function escapeICalText(text: string): string {
 }
 
 // ---------- Helper: format datetime for iCal ----------
-function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: string } {
+function formatDT(isoString: string, isAllDay: boolean): { line: string } {
   // For all-day events: keep date‑only, no timezone
   if (isAllDay) {
     const clean = isoString.split('+')[0].replace('Z', '');
     const [datePart] = clean.split('T');
     const [year, month, day] = datePart.split('-').map(Number);
-    // isEnd is ignored – we never add a day here because Notion’s end is already exclusive
     const m = String(month).padStart(2, '0');
     const dd = String(day).padStart(2, '0');
     return { line: `;VALUE=DATE:${year}${m}${dd}` };
@@ -141,15 +140,30 @@ export async function GET() {
 
     // ----- Process each event -----
     for (const page of data.results || []) {
-      const dateProp = page.properties?.Date?.date;
+      const props = page.properties;
+
+      // Extract Date from Formula "Event date" or fallback to "Date"
+      const dateProp =
+        props?.['Event date']?.formula?.date ||
+        props?.['Event date']?.date ||
+        props?.['Date']?.date;
+
       if (!dateProp) continue;
 
       const start = dateProp.start;
-      const end = dateProp.end;  // Notion's end is exclusive for all-day, exact for timed
+      const end = dateProp.end;
       if (!start) continue;
 
       const isAllDay = !start.includes('T');
-      const title = page.properties?.Name?.title?.[0]?.plain_text || 'Untitled';
+      const icon = page.icon?.type === 'emoji' ? `${page.icon.emoji} ` : '';
+      const rawTitle = props?.Name?.title?.[0]?.plain_text || 'Untitled';
+      const title = `${icon}${rawTitle}`;
+
+      // Check for Birthday tag
+      const tagsArray = props?.Tags?.multi_select || [];
+      const singleTag = props?.Tags?.select ? [props.Tags.select] : [];
+      const allTags = [...tagsArray, ...singleTag];
+      const isBirthday = allTags.some((t: any) => t.name?.toLowerCase() === 'birthday');
 
       lines.push('BEGIN:VEVENT');
       lines.push(`UID:${page.id}@ebc-youth`);
@@ -157,40 +171,38 @@ export async function GET() {
       lines.push(`DTSTAMP:${now}`);
 
       // --- DTSTART ---
-      const startLine = formatDT(start, isAllDay, false);
+      const startLine = formatDT(start, isAllDay);
       lines.push(`DTSTART${startLine.line}`);
 
       // --- DTEND ---
       let endDate = end;
       if (isAllDay) {
-        // All-day events MUST have an exclusive DTEND.
-        // If Notion didn't give one, add 1 day to the start date.
         if (!endDate) {
-          const d = new Date(start + 'T00:00:00Z');
-          d.setUTCDate(d.getUTCDate() + 1);
-          endDate = d.toISOString().split('T')[0]; // YYYY-MM-DD
+          const [year, month, day] = start.split('-').map(Number);
+          const d = new Date(Date.UTC(year, month - 1, day + 1));
+          const y = d.getUTCFullYear();
+          const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(d.getUTCDate()).padStart(2, '0');
+          endDate = `${y}-${m}-${dd}`;
         }
-        // Notion's end is already exclusive, so we pass isEnd: false.
-        const endLine = formatDT(endDate, true, false);
+        const endLine = formatDT(endDate, true);
         lines.push(`DTEND${endLine.line}`);
       } else {
-        // Timed events
         if (endDate) {
-          // Notion's end is the exact datetime (already exclusive).
-          const endLine = formatDT(endDate, false, false);
+          const endLine = formatDT(endDate, false);
           lines.push(`DTEND${endLine.line}`);
         } else {
-          // No end time provided – default to +1 hour
           const d = new Date(start);
-          d.setHours(d.getHours() + 1);
-          const endLine = formatDT(d.toISOString(), false, false);
+          d.setHours(d.getHours() + 2); // Default to 2 hours
+          const endLine = formatDT(d.toISOString(), false);
           lines.push(`DTEND${endLine.line}`);
         }
       }
 
-      // (Optional) Add description from page blocks
-      // const description = await getPageBlocksText(page.id, token);
-      // if (description) lines.push(`DESCRIPTION:${escapeICalText(description)}`);
+      // Repeat yearly if marked as Birthday
+      if (isBirthday) {
+        lines.push('RRULE:FREQ=YEARLY');
+      }
 
       lines.push('END:VEVENT');
     }
