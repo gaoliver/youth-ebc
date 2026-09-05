@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import ical, { ICalCalendarMethod, ICalEventRepeatingFreq } from 'ical-generator';
 
-// Desabilita o cache da rota para que as correções de horário reflitam imediatamente
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -46,10 +44,49 @@ async function getPageBlocksText(pageId: string, token: string) {
         return '';
       })
       .filter(Boolean)
-      .join('\n');
+      .join('\\n');
   } catch {
     return '';
   }
+}
+
+// Limpa strings para o formato aceito pelo padrão iCal
+function escapeICalText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n');
+}
+
+// Extrai exatamente a data e hora digitadas no Notion sem converter timezone
+function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: string } {
+  const clean = isoString.split('+')[0].replace('Z', '');
+  const [datePart, timePart = '00:00:00'] = clean.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+
+  if (isAllDay) {
+    if (isEnd) {
+      const d = new Date(Date.UTC(year, month - 1, day + 1));
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return { line: `;VALUE=DATE:${y}${m}${dd}` };
+    }
+    const m = String(month).padStart(2, '0');
+    const dd = String(day).padStart(2, '0');
+    return { line: `;VALUE=DATE:${year}${m}${dd}` };
+  }
+
+  const [hours = '00', minutes = '00', seconds = '00'] = timePart.split(':');
+  const y = String(year);
+  const m = String(month).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).slice(0, 2).padStart(2, '0');
+
+  return { line: `;TZID=Europe/Amsterdam:${y}${m}${dd}T${hh}${mm}${ss}` };
 }
 
 export async function GET() {
@@ -60,112 +97,30 @@ export async function GET() {
     return new NextResponse('Notion credentials not configured in .env.local', { status: 500 });
   }
 
-  const calendar = ical({
-    name: 'EBC Youth',
-    timezone: 'Europe/Amsterdam',
-    x: [
-      { key: 'X-WR-TIMEZONE', value: 'Europe/Amsterdam' },
-      { key: 'X-WR-CALNAME', value: 'EBC Youth' },
-    ],
-    method: ICalCalendarMethod.PUBLISH,
-  });
-
   try {
     const data = await queryNotionDatabase(databaseId, token);
+    const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    for (const page of data.results) {
-      const props = page.properties;
-
-      // 1. Icon / Emoji
-      const icon = page.icon?.type === 'emoji' ? `${page.icon.emoji} ` : '';
-
-      // 2. Title
-      const rawTitle = props.Name?.title?.[0]?.plain_text || 'Untitled Event';
-      const summary = `${icon}${rawTitle}`;
-
-      // 3. Category / Tag
-      const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
-      const isBirthday = tag.toLowerCase() === 'birthday';
-
-      // 4. Date Extraction (Formula and Native)
-      const dateProp = 
-        props['Event date']?.formula?.date || 
-        props['Event date']?.date || 
-        props['Date']?.date;
-
-      if (!dateProp) {
-        continue;
-      }
-
-      const dateStartString = dateProp.start;
-      const isAllDay = !dateStartString.includes('T');
-      
-      let startDate: Date;
-      let endDate: Date;
-
-      if (isAllDay) {
-        // Eventos de dia inteiro (ex: aniversários): YYYY-MM-DD
-        const [year, month, day] = dateStartString.split('-').map(Number);
-        startDate = new Date(Date.UTC(year, month - 1, day));
-
-        if (dateProp.end) {
-          const [endYear, endMonth, endDay] = dateProp.end.split('-').map(Number);
-          endDate = new Date(Date.UTC(endYear, endMonth - 1, endDay + 1));
-        } else {
-          endDate = new Date(Date.UTC(year, month - 1, day + 1));
-        }
-      } else {
-        // Eventos com horário marcado:
-        // Como o Notion envia com offset (+02:00), o construtor nativo Date()
-        // calcula o timestamp UTC absoluto exato.
-        startDate = new Date(dateStartString);
-
-        if (dateProp.end) {
-          endDate = new Date(dateProp.end);
-        } else {
-          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h de duração padrão
-        }
-      }
-
-      // 5. Location
-      const location = props.Location?.rich_text?.[0]?.plain_text || props.Location?.select?.name || '';
-
-      // 6. Internal event text
-      const pageContent = await getPageBlocksText(page.id, token);
-
-      // 7. Formatted description
-      const descriptionLines = [
-        tag ? `Category: ${tag}` : '',
-        pageContent ? `\n--- Details ---\n${pageContent}` : '',
-        `\nView on Notion: ${page.url}`,
-      ].filter(Boolean);
-
-      // 8. Event Creation
-      // NÃO passamos timezone individual no evento.
-      // O evento emite o padrão UTC (Z) absoluto e o X-WR-TIMEZONE do cabeçalho
-      // instrui o Apple Calendar / Google Calendar a renderizar em Europe/Amsterdam.
-      calendar.createEvent({
-        id: page.id,
-        start: startDate,
-        end: endDate,
-        allDay: isAllDay,
-        summary: summary,
-        description: descriptionLines.join('\n'),
-        location: location,
-        url: page.url,
-        repeating: isBirthday ? { freq: ICalEventRepeatingFreq.YEARLY } : undefined,
-      });
-    }
-
-    return new NextResponse(calendar.toString(), {
-      headers: {
-        'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'inline; filename="calendar.ics"',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-      },
-    });
-  } catch (error: any) {
-    console.error('API Error:', error.message || error);
-    return new NextResponse(`Internal Error: ${error.message}`, { status: 500 });
-  }
-}
+    const lines: string[] = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//EBC Youth//Calendar//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:EBC Youth',
+      'X-WR-TIMEZONE:Europe/Amsterdam',
+      'BEGIN:VTIMEZONE',
+      'TZID:Europe/Amsterdam',
+      'X-LIC-LOCATION:Europe/Amsterdam',
+      'BEGIN:DAYLIGHT',
+      'TZOFFSETFROM:+0100',
+      'TZOFFSETTO:+0200',
+      'TZNAME:CEST',
+      'DTSTART:19700329T020000',
+      'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU',
+      'END:DAYLIGHT',
+      'BEGIN:STANDARD',
+      'TZOFFSETFROM:+0200',
+      'TZOFFSETTO:+0100',
+      'TZNAME:CET',
+      Normally I can help with things like this, but I don't seem to have access to that content. You can try again or ask me for something else.
