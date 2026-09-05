@@ -50,7 +50,7 @@ async function getPageBlocksText(pageId: string, token: string) {
   }
 }
 
-// Limpa strings para o formato aceito pelo padrão iCal
+// Cleans strings for iCal format
 function escapeICalText(text: string): string {
   return text
     .replace(/\\/g, '\\\\')
@@ -59,9 +59,9 @@ function escapeICalText(text: string): string {
     .replace(/\n/g, '\\n');
 }
 
-// Extrai exatamente a data e hora digitadas no Notion sem converter timezone
+// ✅ FIXED: converts the ISO string to Europe/Amsterdam local time
 function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: string } {
-  // For all-day events, keep the original date‑only logic (no timezone conversion)
+  // For all-day events: keep date‑only (no timezone conversion)
   if (isAllDay) {
     const clean = isoString.split('+')[0].replace('Z', '');
     const [datePart] = clean.split('T');
@@ -78,7 +78,7 @@ function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: 
     return { line: `;VALUE=DATE:${year}${m}${dd}` };
   }
 
-  // For timed events: parse the ISO string as a UTC date and format it in Amsterdam time
+  // For timed events: parse as UTC and format in Amsterdam time
   const date = new Date(isoString);
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Europe/Amsterdam',
@@ -136,4 +136,60 @@ export async function GET() {
       'TZOFFSETFROM:+0200',
       'TZOFFSETTO:+0100',
       'TZNAME:CET',
-      Normally I can help with things like this, but I don't seem to have access to that content. You can try again or ask me for something else.
+      'DTSTART:19701025T030000',
+      'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU',
+      'END:STANDARD',
+      'END:VTIMEZONE',
+    ];
+
+    // (Now process events from data.results and append to lines...)
+    // You'll need to add your event‑generation logic here.
+    // Make sure to use the updated formatDT function when building DTSTART/DTEND.
+
+    // Example loop (assuming your Notion properties are 'Date' and 'Name'):
+    for (const page of data.results || []) {
+      const dateProp = page.properties?.Date?.date;
+      if (!dateProp) continue;
+      const title = page.properties?.Name?.title?.[0]?.plain_text || 'Untitled';
+      const start = dateProp.start;
+      const end = dateProp.end;
+      const isAllDay = !start?.includes('T');
+
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:${page.id}@ebc-youth`);
+      lines.push(`SUMMARY:${escapeICalText(title)}`);
+      lines.push(`DTSTAMP:${now}`);
+
+      const startLine = formatDT(start, isAllDay, false);
+      lines.push(`DTSTART${startLine.line}`);
+
+      if (end) {
+        const endLine = formatDT(end, isAllDay, true);
+        lines.push(`DTEND${endLine.line}`);
+      } else {
+        // If no end, set to start + 1 hour for timed, or same day for all-day
+        // (adjust to your needs)
+      }
+
+      // Optional: add description from page content
+      // const description = await getPageBlocksText(page.id, token);
+      // if (description) lines.push(`DESCRIPTION:${escapeICalText(description)}`);
+
+      lines.push('END:VEVENT');
+    }
+
+    lines.push('END:VCALENDAR');
+
+    const ics = lines.join('\r\n');
+
+    return new NextResponse(ics, {
+      headers: {
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="calendar.ics"',
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    return new NextResponse('Failed to generate calendar', { status: 500 });
+  }
+}
