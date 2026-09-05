@@ -23,7 +23,7 @@ async function queryNotionDatabase(databaseId: string, token: string) {
   return res.json();
 }
 
-// ---------- Helper: get page blocks (optional description) ----------
+// ---------- Helper: get page blocks (description) ----------
 async function getPageBlocksText(pageId: string, token: string) {
   try {
     const res = await fetch(`https://api.notion.com/v1/blocks/${pageId}/children`, {
@@ -46,7 +46,7 @@ async function getPageBlocksText(pageId: string, token: string) {
         return '';
       })
       .filter(Boolean)
-      .join('\\n');
+      .join('\n');
   } catch {
     return '';
   }
@@ -58,12 +58,11 @@ function escapeICalText(text: string): string {
     .replace(/\\/g, '\\\\')
     .replace(/;/g, '\\;')
     .replace(/,/g, '\\,')
-    .replace(/\n/g, '\\n');
+    .replace(/\r?\n/g, '\\n');
 }
 
 // ---------- Helper: format datetime for iCal ----------
 function formatDT(isoString: string, isAllDay: boolean): { line: string } {
-  // For all-day events: keep date‑only, no timezone
   if (isAllDay) {
     const clean = isoString.split('+')[0].replace('Z', '');
     const [datePart] = clean.split('T');
@@ -73,7 +72,6 @@ function formatDT(isoString: string, isAllDay: boolean): { line: string } {
     return { line: `;VALUE=DATE:${year}${m}${dd}` };
   }
 
-  // For timed events: parse as UTC and convert to Amsterdam local
   const date = new Date(isoString);
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Europe/Amsterdam',
@@ -138,11 +136,10 @@ export async function GET() {
       'END:VTIMEZONE',
     ];
 
-    // ----- Process each event -----
     for (const page of data.results || []) {
       const props = page.properties;
 
-      // Extract Date from Formula "Event date" or fallback to "Date"
+      // 1. Data
       const dateProp =
         props?.['Event date']?.formula?.date ||
         props?.['Event date']?.date ||
@@ -159,22 +156,38 @@ export async function GET() {
       const rawTitle = props?.Name?.title?.[0]?.plain_text || 'Untitled';
       const title = `${icon}${rawTitle}`;
 
-      // Check for Birthday tag
+      // 2. Categoria e Tags
       const tagsArray = props?.Tags?.multi_select || [];
       const singleTag = props?.Tags?.select ? [props.Tags.select] : [];
       const allTags = [...tagsArray, ...singleTag];
+      const tagLabel = allTags.map((t: any) => t.name).join(', ');
       const isBirthday = allTags.some((t: any) => t.name?.toLowerCase() === 'birthday');
+
+      // 3. Localização
+      const location = 
+        props?.Location?.rich_text?.[0]?.plain_text || 
+        props?.Location?.select?.name || 
+        '';
+
+      // 4. Descrição (Conteúdo interno da página)
+      const pageContent = await getPageBlocksText(page.id, token);
+      const descriptionLines = [
+        tagLabel ? `Category: ${tagLabel}` : '',
+        pageContent ? `\n--- Details ---\n${pageContent}` : '',
+        page.url ? `\nView on Notion: ${page.url}` : '',
+      ].filter(Boolean);
+      const fullDescription = descriptionLines.join('\n');
 
       lines.push('BEGIN:VEVENT');
       lines.push(`UID:${page.id}@ebc-youth`);
       lines.push(`SUMMARY:${escapeICalText(title)}`);
       lines.push(`DTSTAMP:${now}`);
 
-      // --- DTSTART ---
+      // DTSTART
       const startLine = formatDT(start, isAllDay);
       lines.push(`DTSTART${startLine.line}`);
 
-      // --- DTEND ---
+      // DTEND
       let endDate = end;
       if (isAllDay) {
         if (!endDate) {
@@ -193,13 +206,24 @@ export async function GET() {
           lines.push(`DTEND${endLine.line}`);
         } else {
           const d = new Date(start);
-          d.setHours(d.getHours() + 2); // Default to 2 hours
+          d.setHours(d.getHours() + 2);
           const endLine = formatDT(d.toISOString(), false);
           lines.push(`DTEND${endLine.line}`);
         }
       }
 
-      // Repeat yearly if marked as Birthday
+      if (location) {
+        lines.push(`LOCATION:${escapeICalText(location)}`);
+      }
+
+      if (fullDescription) {
+        lines.push(`DESCRIPTION:${escapeICalText(fullDescription)}`);
+      }
+
+      if (page.url) {
+        lines.push(`URL:${page.url}`);
+      }
+
       if (isBirthday) {
         lines.push('RRULE:FREQ=YEARLY');
       }
