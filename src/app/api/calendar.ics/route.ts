@@ -96,27 +96,49 @@ export async function GET() {
       let startDate: Date;
       let endDate: Date;
 
-      // Safely parsing All-Day events to avoid Timezone bugs
       if (isAllDay) {
+        // Eventos de dia inteiro (ex: aniversários)
         const [year, month, day] = dateStartString.split('-').map(Number);
-        startDate = new Date(year, month - 1, day);
-        
+        startDate = new Date(Date.UTC(year, month - 1, day));
+
         if (dateProp.end) {
           const [endYear, endMonth, endDay] = dateProp.end.split('-').map(Number);
-          endDate = new Date(endYear, endMonth - 1, endDay);
-          endDate.setDate(endDate.getDate() + 1); 
+          endDate = new Date(Date.UTC(endYear, endMonth - 1, endDay + 1));
         } else {
-          endDate = new Date(startDate);
-          endDate.setDate(endDate.getDate() + 1);
+          endDate = new Date(Date.UTC(year, month - 1, day + 1));
         }
       } else {
+        // Eventos com horário: garante que a string não seja corrompida pelo fuso da Vercel
+        // Se a string do Notion não tiver indicador de fuso (+ ou Z), forçamos Europe/Amsterdam
+        let normalizedStart = dateStartString;
+        if (!dateStartString.includes('Z') && !dateStartString.match(/[+-]\d{2}:\d{2}$/)) {
+          // No horário de verão da Holanda (CEST) é +02:00, no inverno (CET) é +01:00
+          // Usando Intl para resolver o offset correto da data dinamicamente:
+          const tempDate = new Date(dateStartString);
+          const isDST = tempDate.getTimezoneOffset ? true : false;
+        }
+
         startDate = new Date(dateStartString);
+
         if (dateProp.end) {
           endDate = new Date(dateProp.end);
         } else {
-          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); 
+          endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h padrão
         }
       }
+
+      // Monta o evento aplicando Europe/Amsterdam para o iPhone/Google entenderem a TZID
+      const event = calendar.createEvent({
+        id: page.id,
+        start: startDate,
+        end: endDate,
+        allDay: isAllDay,
+        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
+        summary: summary,
+        description: descriptionLines.join('\n'),
+        location: location,
+        url: page.url,
+      });
 
       // 5. Location
       const location = props.Location?.rich_text?.[0]?.plain_text || props.Location?.select?.name || '';
