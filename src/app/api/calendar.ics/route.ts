@@ -58,7 +58,6 @@ export async function GET() {
 
   const calendar = ical({
     name: 'EBC Youth',
-    timezone: 'Europe/Amsterdam',
     method: ICalCalendarMethod.PUBLISH,
   });
 
@@ -79,7 +78,7 @@ export async function GET() {
       const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
       const isBirthday = tag.toLowerCase() === 'birthday';
 
-      // 4. Date (Handling Formula and Native properties)
+      // 4. Date
       const dateProp = 
         props['Event date']?.formula?.date || 
         props['Event date']?.date || 
@@ -96,7 +95,6 @@ export async function GET() {
       let endDate: Date;
 
       if (isAllDay) {
-        // Eventos de dia inteiro (ex: aniversários)
         const [year, month, day] = dateStartString.split('-').map(Number);
         startDate = new Date(Date.UTC(year, month - 1, day));
 
@@ -107,10 +105,21 @@ export async function GET() {
           endDate = new Date(Date.UTC(year, month - 1, day + 1));
         }
       } else {
-        startDate = new Date(dateStartString);
+        // Extrai exatamente o ano, mês, dia, hora e minuto da string do Notion
+        // Sem deixar o Node/Vercel converter fuso
+        const cleanStart = dateStartString.split('+')[0].replace('Z', '');
+        const [datePart, timePart] = cleanStart.split('T');
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hours, minutes] = timePart.split(':').map(Number);
+
+        startDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
 
         if (dateProp.end) {
-          endDate = new Date(dateProp.end);
+          const cleanEnd = dateProp.end.split('+')[0].replace('Z', '');
+          const [eDatePart, eTimePart] = cleanEnd.split('T');
+          const [eYear, eMonth, eDay] = eDatePart.split('-').map(Number);
+          const [eHours, eMinutes] = eTimePart.split(':').map(Number);
+          endDate = new Date(Date.UTC(eYear, eMonth - 1, eDay, eHours, eMinutes));
         } else {
           endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h padrão
         }
@@ -129,13 +138,14 @@ export async function GET() {
         `\nView on Notion: ${page.url}`,
       ].filter(Boolean);
 
-      // 8. Create event (declarado apenas uma vez e com timezone definido)
+      // 8. Event Creation
+      // floating: true força o horário a ser interpretado como literal (19:30 é 19:30 em qualquer aparelho)
       const event = calendar.createEvent({
         id: page.id,
         start: startDate,
         end: endDate,
         allDay: isAllDay,
-        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
+        floating: !isAllDay,
         summary: summary,
         description: descriptionLines.join('\n'),
         location: location,
