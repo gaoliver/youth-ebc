@@ -61,11 +61,11 @@ function escapeICalText(text: string): string {
 
 // Extrai exatamente a data e hora digitadas no Notion sem converter timezone
 function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: string } {
-  const clean = isoString.split('+')[0].replace('Z', '');
-  const [datePart, timePart = '00:00:00'] = clean.split('T');
-  const [year, month, day] = datePart.split('-').map(Number);
-
+  // For all-day events, keep the original date‑only logic (no timezone conversion)
   if (isAllDay) {
+    const clean = isoString.split('+')[0].replace('Z', '');
+    const [datePart] = clean.split('T');
+    const [year, month, day] = datePart.split('-').map(Number);
     if (isEnd) {
       const d = new Date(Date.UTC(year, month - 1, day + 1));
       const y = d.getUTCFullYear();
@@ -78,15 +78,28 @@ function formatDT(isoString: string, isAllDay: boolean, isEnd = false): { line: 
     return { line: `;VALUE=DATE:${year}${m}${dd}` };
   }
 
-  const [hours = '00', minutes = '00', seconds = '00'] = timePart.split(':');
-  const y = String(year);
-  const m = String(month).padStart(2, '0');
-  const dd = String(day).padStart(2, '0');
-  const hh = String(hours).padStart(2, '0');
-  const mm = String(minutes).padStart(2, '0');
-  const ss = String(seconds).slice(0, 2).padStart(2, '0');
+  // For timed events: parse the ISO string as a UTC date and format it in Amsterdam time
+  const date = new Date(isoString);
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value || '00';
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  const hour = get('hour');
+  const minute = get('minute');
+  const second = get('second');
 
-  return { line: `;TZID=Europe/Amsterdam:${y}${m}${dd}T${hh}${mm}${ss}` };
+  return { line: `;TZID=Europe/Amsterdam:${year}${month}${day}T${hour}${minute}${second}` };
 }
 
 export async function GET() {
