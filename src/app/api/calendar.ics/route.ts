@@ -48,6 +48,16 @@ async function getPageBlocksText(pageId: string, token: string) {
   }
 }
 
+// Extrai os componentes literais de data e hora sem deixar o Node converter fuso
+function parseLocalDate(dateString: string): Date {
+  const clean = dateString.split('+')[0].replace('Z', '');
+  const [datePart, timePart = '00:00:00'] = clean.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours = 0, minutes = 0, seconds = 0] = timePart.split(':').map(Number);
+
+  return new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
+}
+
 export async function GET() {
   const token = process.env.NOTION_TOKEN;
   const databaseId = process.env.NOTION_DATABASE_ID;
@@ -58,6 +68,7 @@ export async function GET() {
 
   const calendar = ical({
     name: 'EBC Youth',
+    timezone: 'Europe/Amsterdam',
     method: ICalCalendarMethod.PUBLISH,
   });
 
@@ -74,11 +85,11 @@ export async function GET() {
       const rawTitle = props.Name?.title?.[0]?.plain_text || 'Untitled Event';
       const summary = `${icon}${rawTitle}`;
 
-      // 3. Category / Tag (To identify birthdays)
+      // 3. Category / Tag
       const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
       const isBirthday = tag.toLowerCase() === 'birthday';
 
-      // 4. Date
+      // 4. Date Extraction (Formula and Native)
       const dateProp = 
         props['Event date']?.formula?.date || 
         props['Event date']?.date || 
@@ -105,21 +116,10 @@ export async function GET() {
           endDate = new Date(Date.UTC(year, month - 1, day + 1));
         }
       } else {
-        // Extrai exatamente o ano, mês, dia, hora e minuto da string do Notion
-        // Sem deixar o Node/Vercel converter fuso
-        const cleanStart = dateStartString.split('+')[0].replace('Z', '');
-        const [datePart, timePart] = cleanStart.split('T');
-        const [year, month, day] = datePart.split('-').map(Number);
-        const [hours, minutes] = timePart.split(':').map(Number);
-
-        startDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+        startDate = parseLocalDate(dateStartString);
 
         if (dateProp.end) {
-          const cleanEnd = dateProp.end.split('+')[0].replace('Z', '');
-          const [eDatePart, eTimePart] = cleanEnd.split('T');
-          const [eYear, eMonth, eDay] = eDatePart.split('-').map(Number);
-          const [eHours, eMinutes] = eTimePart.split(':').map(Number);
-          endDate = new Date(Date.UTC(eYear, eMonth - 1, eDay, eHours, eMinutes));
+          endDate = parseLocalDate(dateProp.end);
         } else {
           endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h padrão
         }
@@ -139,24 +139,18 @@ export async function GET() {
       ].filter(Boolean);
 
       // 8. Event Creation
-      // floating: true força o horário a ser interpretado como literal (19:30 é 19:30 em qualquer aparelho)
-      const event = calendar.createEvent({
+      calendar.createEvent({
         id: page.id,
         start: startDate,
         end: endDate,
         allDay: isAllDay,
-        floating: !isAllDay,
+        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
         summary: summary,
         description: descriptionLines.join('\n'),
         location: location,
         url: page.url,
+        repeating: isBirthday ? { freq: ICalEventRepeatingFreq.YEARLY } : undefined,
       });
-
-      if (isBirthday) {
-        event.repeating({
-          freq: ICalEventRepeatingFreq.YEARLY,
-        });
-      }
     }
 
     return new NextResponse(calendar.toString(), {
