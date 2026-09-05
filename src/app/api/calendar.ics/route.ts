@@ -214,7 +214,7 @@ export async function GET() {
     return new NextResponse(ics, {
       headers: {
         'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="calendar.ics"',
+        'Content-Disposition': 'inline; filename="calendar.ics"',
       },
     });
   } catch (error) {
