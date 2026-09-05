@@ -79,14 +79,13 @@ export async function GET() {
       const tag = props.Tags?.select?.name || props.Tags?.multi_select?.[0]?.name || '';
       const isBirthday = tag.toLowerCase() === 'birthday';
 
-      // 4. Date (Robust extraction handling Notion Formula properties)
+      // 4. Date (Handling Formula and Native properties)
       const dateProp = 
         props['Event date']?.formula?.date || 
         props['Event date']?.date || 
         props['Date']?.date;
 
       if (!dateProp) {
-        console.log(`[DEBUG] Skipped "${rawTitle}" because no date property was found.`);
         continue;
       }
 
@@ -108,16 +107,6 @@ export async function GET() {
           endDate = new Date(Date.UTC(year, month - 1, day + 1));
         }
       } else {
-        // Eventos com horário: garante que a string não seja corrompida pelo fuso da Vercel
-        // Se a string do Notion não tiver indicador de fuso (+ ou Z), forçamos Europe/Amsterdam
-        let normalizedStart = dateStartString;
-        if (!dateStartString.includes('Z') && !dateStartString.match(/[+-]\d{2}:\d{2}$/)) {
-          // No horário de verão da Holanda (CEST) é +02:00, no inverno (CET) é +01:00
-          // Usando Intl para resolver o offset correto da data dinamicamente:
-          const tempDate = new Date(dateStartString);
-          const isDST = tempDate.getTimezoneOffset ? true : false;
-        }
-
         startDate = new Date(dateStartString);
 
         if (dateProp.end) {
@@ -126,19 +115,6 @@ export async function GET() {
           endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000); // 2h padrão
         }
       }
-
-      // Monta o evento aplicando Europe/Amsterdam para o iPhone/Google entenderem a TZID
-      const event = calendar.createEvent({
-        id: page.id,
-        start: startDate,
-        end: endDate,
-        allDay: isAllDay,
-        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
-        summary: summary,
-        description: descriptionLines.join('\n'),
-        location: location,
-        url: page.url,
-      });
 
       // 5. Location
       const location = props.Location?.rich_text?.[0]?.plain_text || props.Location?.select?.name || '';
@@ -153,11 +129,13 @@ export async function GET() {
         `\nView on Notion: ${page.url}`,
       ].filter(Boolean);
 
+      // 8. Create event (declarado apenas uma vez e com timezone definido)
       const event = calendar.createEvent({
         id: page.id,
         start: startDate,
         end: endDate,
         allDay: isAllDay,
+        timezone: isAllDay ? undefined : 'Europe/Amsterdam',
         summary: summary,
         description: descriptionLines.join('\n'),
         location: location,
